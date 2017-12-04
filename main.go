@@ -35,16 +35,19 @@ import (
 )
 
 var (
-	additionalDNSNames string
-	certDir            string
-	clusterDomain      string
-	hostname           string
-	namespace          string
-	podIP              string
-	podName            string
-	serviceIPs         string
-	serviceNames       string
-	subdomain          string
+	additionalDNSNames  string
+	certDir             string
+	clusterDomain       string
+	hostname            string
+	namespace           string
+	podIP               string
+	podName             string
+	serviceIPs          string
+	serviceNames        string
+	subdomain           string
+	countries           string
+	organizations       string
+	organizationalUnits string
 )
 
 func main() {
@@ -58,6 +61,9 @@ func main() {
 	flag.StringVar(&serviceNames, "service-names", "", "service names that resolve to this Pod; comma separated")
 	flag.StringVar(&serviceIPs, "service-ips", "", "service IP addresses that resolve to this Pod; comma separated")
 	flag.StringVar(&subdomain, "subdomain", "", "subdomain as defined by pod.spec.subdomain")
+	flag.StringVar(&countries, "countries", "", "The Cs set on the certificate request, comma separated if more than one")
+	flag.StringVar(&organizations, "organizations", "", "The Os set on the certificate request, comma separated")
+	flag.StringVar(&organizationalUnits, "organizational-units", "", "The OUs set on the certificate request, comma separated")
 	flag.Parse()
 
 	certificateSigningRequestName := fmt.Sprintf("%s-%s", podName, namespace)
@@ -139,7 +145,10 @@ func main() {
 	// Generate the certificate request, pem encode it, and save it to the filesystem.
 	certificateRequestTemplate := x509.CertificateRequest{
 		Subject: pkix.Name{
-			CommonName: dnsNames[0],
+			Country:            strings.Split(countries, ","),
+			Organization:       strings.Split(organizations, ","),
+			OrganizationalUnit: strings.Split(organizationalUnits, ","),
+			CommonName:         dnsNames[0],
 		},
 		SignatureAlgorithm: x509.SHA256WithRSA,
 		DNSNames:           dnsNames,
