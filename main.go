@@ -52,6 +52,9 @@ var (
 	secretName         string
 	createSecret       bool
 	keysize            int
+	countries           string
+	organizations       string
+	organizationalUnits string
 )
 
 func main() {
@@ -71,6 +74,9 @@ func main() {
 	flag.StringVar(&secretName, "secret-name", "", "secret name to store generated files")
 	flag.BoolVar(&createSecret, "create-secret", false, "create a new secret instead of waiting for one to update")
 	flag.IntVar(&keysize, "keysize", 2048, "bit size of private key")
+	flag.StringVar(&countries, "countries", "", "The Cs set on the certificate request, comma separated if more than one")
+	flag.StringVar(&organizations, "organizations", "", "The Os set on the certificate request, comma separated")
+	flag.StringVar(&organizationalUnits, "organizational-units", "", "The OUs set on the certificate request, comma separated")
 	flag.Parse()
 
 	certificateSigningRequestName := fmt.Sprintf("%s-%s", podName, namespace)
@@ -179,7 +185,10 @@ func main() {
 	// Generate the certificate request, pem encode it, and save it to the filesystem.
 	certificateRequestTemplate := x509.CertificateRequest{
 		Subject: pkix.Name{
-			CommonName: dnsNames[0],
+			Country:            strings.Split(countries, ","),
+			Organization:       strings.Split(organizations, ","),
+			OrganizationalUnit: strings.Split(organizationalUnits, ","),
+			CommonName:         dnsNames[0],
 		},
 		SignatureAlgorithm: x509.SHA256WithRSA,
 		DNSNames:           dnsNames,
