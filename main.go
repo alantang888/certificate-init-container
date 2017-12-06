@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	apiv1 "github.com/ericchiang/k8s/api/v1"
 	certificates "github.com/ericchiang/k8s/apis/certificates/v1beta1"
 
 	"github.com/ericchiang/k8s"
@@ -50,7 +51,6 @@ var (
 	subdomain           string
 	labels              string
 	secretName          string
-	createSecret        bool
 	keysize             int
 	countries           string
 	organizations       string
@@ -59,7 +59,7 @@ var (
 
 func main() {
 	flag.StringVar(&additionalDNSNames, "additional-dnsnames", "", "additional dns names; comma separated")
-	flag.StringVar(&certDir, "cert-dir", "/etc/tls", "The directory where the TLS certs should be written")
+	flag.StringVar(&certDir, "cert-dir", "", "The directory where the TLS certs should be written")
 	flag.StringVar(&clusterDomain, "cluster-domain", "cluster.local", "Kubernetes cluster domain")
 	flag.BoolVar(&headlessNameAsCN, "headless-name-as-cn", false, "If a headless domain name is provided, use it as CN")
 	flag.StringVar(&hostname, "hostname", "", "hostname as defined by pod.spec.hostname")
@@ -71,8 +71,7 @@ func main() {
 	flag.StringVar(&serviceIPs, "service-ips", "", "service IP addresses that resolve to this Pod; comma separated")
 	flag.StringVar(&subdomain, "subdomain", "", "subdomain as defined by pod.spec.subdomain")
 	flag.StringVar(&labels, "labels", "", "labels to include in CertificateSigningRequest object; comma seprated list of key=value")
-	flag.StringVar(&secretName, "secret-name", "", "secret name to store generated files")
-	flag.BoolVar(&createSecret, "create-secret", false, "create a new secret instead of waiting for one to update")
+	flag.StringVar(&secretName, "secret-name", "", "secret name to store generated files, will not be persisted to disk")
 	flag.IntVar(&keysize, "keysize", 2048, "bit size of private key")
 	flag.StringVar(&countries, "countries", "", "The Cs set on the certificate request, comma separated if more than one")
 	flag.StringVar(&organizations, "organizations", "", "The Os set on the certificate request, comma separated")
@@ -86,6 +85,39 @@ func main() {
 		log.Fatalf("unable to create a Kubernetes client: %s", err)
 	}
 
+	if certDir != "" && secretName != "" {
+		log.Fatal("-cert-dir and -secret-name does not make sense together")
+	}
+
+	if certDir == "" {
+		certDir = "/etc/tls"
+	}
+
+	// Before we do anything, if we are storing in a secret, make sure it doesn't contain TLS data already.
+	var secret *apiv1.Secret
+	if secretName != "" {
+		for {
+			ks, err := client.CoreV1().GetSecret(context.Background(), secretName, namespace)
+			if err != nil {
+				log.Printf("Secret to store credentials (%s) not found; trying again in 5 seconds", secretName)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			secretData := ks.GetData()
+			for _, file := range [...]string{"tls.key", "tls.crt", "ca.crt"} {
+				if _, present := secretData[file]; !present {
+					log.Printf("Missing file %s... continuing to generate keys and certificates", file)
+					secret = ks
+					break
+				}
+			}
+			if secret != nil {
+				break
+			}
+			log.Println("Secret is present and contains data, will exit.")
+			os.Exit(0)
+		}
+	}
 	// Generate a private key, pem encode it, and save it to the filesystem.
 	// The private key will be used to create a certificate signing request (csr)
 	// that will be submitted to a Kubernetes CA to obtain a TLS certificate.
@@ -112,12 +144,14 @@ func main() {
 		Bytes: pkey,
 	})
 
-	keyFile := path.Join(certDir, "tls.key")
-	if err := ioutil.WriteFile(keyFile, pemKeyBytes, 0644); err != nil {
-		log.Fatalf("unable to write to %s: %s", keyFile, err)
-	}
+	if secretName == "" {
+		keyFile := path.Join(certDir, "tls.key")
+		if err := ioutil.WriteFile(keyFile, pemKeyBytes, 0644); err != nil {
+			log.Fatalf("unable to write to %s: %s", keyFile, err)
+		}
 
-	log.Printf("wrote %s", keyFile)
+		log.Printf("wrote %s", keyFile)
+	}
 
 	// Gather the list of labels that will be added to the CreateCertificateSigningRequest object
 	labelsMap := make(map[string]string)
@@ -218,12 +252,14 @@ func main() {
 
 	certificateRequestBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: certificateRequest})
 
-	csrFile := path.Join(certDir, "tls.csr")
-	if err := ioutil.WriteFile(csrFile, certificateRequestBytes, 0644); err != nil {
-		log.Fatal("unable to %s, error: %s", csrFile, err)
-	}
+	if secretName == "" {
+		csrFile := path.Join(certDir, "tls.csr")
+		if err := ioutil.WriteFile(csrFile, certificateRequestBytes, 0644); err != nil {
+			log.Fatalf("unable to %s, error: %s", csrFile, err)
+		}
 
-	log.Printf("wrote %s", csrFile)
+		log.Printf("wrote %s", csrFile)
+	}
 
 	// Submit a certificate signing request, wait for it to be approved, then save
 	// the signed certificate to the file system.
@@ -281,44 +317,32 @@ func main() {
 		time.Sleep(5 * time.Second)
 	}
 
-	certFile := path.Join(certDir, "tls.crt")
-	if err := ioutil.WriteFile(certFile, certificate, 0644); err != nil {
-		log.Fatalf("unable to write to %s: %s", certFile, err)
+	if secretName == "" {
+		certFile := path.Join(certDir, "tls.crt")
+		if err := ioutil.WriteFile(certFile, certificate, 0644); err != nil {
+			log.Fatalf("unable to write to %s: %s", certFile, err)
+		}
+		log.Printf("wrote %s", certFile)
 	}
-
-	log.Printf("wrote %s", certFile)
 
 	log.Printf("Deleting certificate signing request  %s", certificateSigningRequestName)
 	client.CertificatesV1Beta1().DeleteCertificateSigningRequest(context.Background(), certificateSigningRequestName)
 	log.Printf("Removed approved request %s", certificateSigningRequestName)
 
-	if secretName != "" {
-		for {
-			ks, err := client.CoreV1().GetSecret(context.Background(), secretName, namespace)
-			if err != nil {
-				if createSecret {
-					log.Fatalf("TODO: cannot create secrets")
-				} else {
-					log.Printf("Secret to store credentials (%s) not found; trying again in 5 seconds", secretName)
-					time.Sleep(5 * time.Second)
-					continue
-				}
-			}
-
-			k8sCrt, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
-
-			stringData := make(map[string]string)
-			stringData["tls.key"] = string(pemKeyBytes)
-			stringData["tls.crt"] = string(certificate)
-			stringData["k8s.crt"] = string(k8sCrt)                                    // ok
-			stringData["tlsAndK8s.crt"] = string(certificate) + "\n" + string(k8sCrt) // ok
-
-			ks.StringData = stringData
-			_, err = client.CoreV1().UpdateSecret(context.TODO(), ks)
-			log.Printf("Stored credentials in secret: (%s)", secretName)
-
-			break
+	if secret != nil {
+		k8sCrt, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+		if err != nil {
+			panic(err)
 		}
+
+		stringData := make(map[string]string)
+		stringData["tls.key"] = string(pemKeyBytes)
+		stringData["tls.crt"] = string(certificate)
+		stringData["ca.crt"] = string(k8sCrt) // ok
+
+		secret.StringData = stringData
+		_, err = client.CoreV1().UpdateSecret(context.TODO(), secret)
+		log.Printf("Stored credentials in secret: (%s)", secretName)
 	}
 
 	os.Exit(0)
