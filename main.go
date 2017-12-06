@@ -36,22 +36,22 @@ import (
 )
 
 var (
-	additionalDNSNames string
-	certDir            string
-	clusterDomain      string
-	headlessNameAsCN   bool
-	hostname           string
-	namespace          string
-	pkcs8Format        bool
-	podIP              string
-	podName            string
-	serviceIPs         string
-	serviceNames       string
-	subdomain          string
-	labels             string
-	secretName         string
-	createSecret       bool
-	keysize            int
+	additionalDNSNames  string
+	certDir             string
+	clusterDomain       string
+	headlessNameAsCN    bool
+	hostname            string
+	namespace           string
+	pkcs8Format         bool
+	podIP               string
+	podName             string
+	serviceIPs          string
+	serviceNames        string
+	subdomain           string
+	labels              string
+	secretName          string
+	createSecret        bool
+	keysize             int
 	countries           string
 	organizations       string
 	organizationalUnits string
@@ -182,13 +182,29 @@ func main() {
 		dnsNames = append(dnsNames, serviceDomainName(n, namespace, clusterDomain))
 	}
 
+	// We need to make sure to send in uninitialized values if no value is set, otherwise we get empty fields
+	// in the CSR
+	var (
+		nameCountry            []string
+		nameOrganization       []string
+		nameOrganizationalUnit []string
+	)
+	if len(countries) > 0 {
+		nameCountry = strings.Split(countries, ",")
+	}
+	if len(organizations) > 0 {
+		nameOrganization = strings.Split(organizations, ",")
+	}
+	if len(organizationalUnits) > 0 {
+		nameOrganizationalUnit = strings.Split(organizationalUnits, ",")
+	}
 	// Generate the certificate request, pem encode it, and save it to the filesystem.
 	certificateRequestTemplate := x509.CertificateRequest{
 		Subject: pkix.Name{
-			Country:            strings.Split(countries, ","),
-			Organization:       strings.Split(organizations, ","),
-			OrganizationalUnit: strings.Split(organizationalUnits, ","),
 			CommonName:         dnsNames[0],
+			Country:            nameCountry,
+			Organization:       nameOrganization,
+			OrganizationalUnit: nameOrganizationalUnit,
 		},
 		SignatureAlgorithm: x509.SHA256WithRSA,
 		DNSNames:           dnsNames,
